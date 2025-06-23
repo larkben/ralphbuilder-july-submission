@@ -1,0 +1,10 @@
+Interface ProposalFactory {
+
+    // proposals
+    pub fn createProposal (description: ByteVec) -> ByteVec
+    pub fn removeProposal (proposalId: ByteVec) -> ()
+
+    // epoch system
+    pub fn getCurrentEpoch () -> ByteVec
+    pub fn advanceEpoch 
+}
