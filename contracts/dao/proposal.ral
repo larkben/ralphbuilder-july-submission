@@ -1,3 +1,53 @@
-Contract Proposal {
-    
+Contract Proposal(
+	proposer: Address,
+	factory: Address,
+	what: ByteVec,
+	why: ByteVec,
+	mut resolution: ByteVec,
+	mut alphRequest: U256,
+	mut upvotes: U256,
+	mut unique: U256,
+	epoch: U256
+) {
+	mapping [Address; U256] upvote
+
+	// users can fund proposals at any stage if alph is requested, funded does not mean given
+	// users can instead put funds towards a task and wait for it to be submitted
+	// after submissions it will go to vote again
+	mapping [Address; U256] funded
+
+	pub fn addVote(caller: Address, amount: U256) -> () {
+		transferTokenToSelf!(caller, ALPH, amount)
+
+		upvote.insert!(caller, caller, amount)
+		
+		upvotes = upvotes + amount
+		unique = unique + 1
+    	}
+
+	pub fn removeVote(caller: Address, amount: U256) -> () {
+		assert!(upvote.contains!(caller), 0)
+		
+		// affirm it's called from factory!
+		
+		if (amount >= upvote[caller]) {
+			transferTokenFromSelf(caller, ALPH, upvote[caller])
+			upvote.remove!(caller, caller)
+			unique = unique - 1
+		}
+		else {
+			transferTokenFromSelf!(caller, ALPH, amount)
+			upvote[caller] = upvote[caller] - amount
+		}
+		
+	}
+	
+	// fund the proposal the alph requested
+	pub fn fund() -> ()
+
+	// starts the second round of voting for fund redemption (at this point funds remain locked)
+	pub fn resolve() -> () 
+	
+	// this option allows the proposer to redeem their funds from resolve result
+	pub fn redeem() -> ()
 }
