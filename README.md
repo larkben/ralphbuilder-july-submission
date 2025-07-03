@@ -1,2 +1,2 @@
-# alephium-dao
-a proper dao on alephium
+# alephium-lend
+a lending protocol on alephium
