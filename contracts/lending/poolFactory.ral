@@ -1,0 +1,12 @@
+Contract PoolFactory (
+    admin: Address,
+    fees: U256
+) {
+    pub fn createPool() -> () {
+
+    }
+
+    pub fn bribePool() -> () {
+
+    }
+}

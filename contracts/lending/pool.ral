@@ -1,0 +1,20 @@
+Contract LendPool (
+    tokenLend: ByteVec,
+    tokenCollateral: ByteVec,
+    mut lending: U256,
+    mut collateral: U256
+) implements {
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn supply(amount: U256) -> () {
+        collateral = collateral + amount
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn borrow(amount: U256) -> () {
+        lending = lending + amount
+    }
+
+    pub fn claim() -> () {
+        // redeem xToken for yeild
+    }
+}

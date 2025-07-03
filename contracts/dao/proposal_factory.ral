@@ -1,9 +1,0 @@
-Contract ProposalFactory(
-    admin: Address,
-    proposalId: ByteVec,
-    mut currentEpoch: ByteVec,
-    epochDuration: U256
-) {
-    
-    
-}
