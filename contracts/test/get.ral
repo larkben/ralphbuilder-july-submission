@@ -1,0 +1,28 @@
+Contract TestGetMethods (
+    // reserves
+    mut reserveOne: U256,
+    mut reserveTwo: U256,
+    // tokens
+    mut tokenOne: ByteVec,
+    mut tokenTwo: ByteVec
+) {
+    @using(updateFields = true, checkExternalCaller = false)
+    pub fn getReserves(pair: Address) -> (U256, U256) {
+        let (r1, r2) = TokenPair(addressToContractId!(pair)).getReserves()
+
+        reserveOne = r1
+        reserveTwo = r2
+
+        return r1, r2
+    }
+
+    @using(updateFields = true, checkExternalCaller = false)
+    pub fn getTokens(pair: Address) -> (ByteVec, ByteVec) {
+        let (t1, t2) = TokenPair(addressToContractId!(pair)).getTokenPair()
+
+        tokenOne = t1
+        tokenTwo = t2
+        
+        return t1, t2
+    }
+}

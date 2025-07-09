@@ -1,48 +1,46 @@
 // oracle / liquidation manager
 
+struct TokenData {
+    mut token: ByteVec,
+    mut dia: ByteVec,
+    mut decimals: ByteVec,
+    mut aggregators: U256,
+    mut price: U256             // 8 decimals
+}
+
 Abstract Contract Manager (
     admin: Address,
-    bot: Address
+    bot: Address,
+    mut collateralFactor: U256              // 150% collateral factor ... liquidation under 150%
 ) {
-    mapping [ByteVec, U256] tokens                              // dia / tokenId -> price
-    mapping [ByteVec, U256] decimals                            // dia / tokenId -> decimals
-    mapping [ByteVec, U256] collateralFactors                   // token -> collateral factor (basis points)
-    mapping [ByteVec, U256] liquidationThresholds               // token -> liquidation threshold
-    mapping [Address, mapping[ByteVec, U256]] userCollateral    // user -> token -> amount
-    mapping [Address, mapping[ByteVec, U256]] userDebt          // user -> token -> amount
-    mapping [ByteVec, ByteVec] poolRegistry                     // token -> pool address
+    // mappings
+    mapping [ByteVec, U256] poolRegistry                     // token ++ num -> address (pool address)
+    mapping [ByteVec, TokenData] tokens
 
-    pub fn addToken(tokenId: ByteVec, decimals: U256, collateralFactor: U256, liquidationThreshold: U256) -> () {
+    pub fn addToken(tokenId: ByteVec, decimals: U256, dia: ByteVec) -> () {
         checkCaller!(callerAddress!() == admin, 0)
-        decimals[tokenId] = decimals
-        collateralFactors[tokenId] = collateralFactor
-        liquidationThresholds[tokenId] = liquidationThreshold
+        
+        // token data
     }
 
-    pub fn removeToken(tokenId: ByteVec) -> () {
-        checkCaller!(callerAddress!() == admin, 0)
-        // Remove token from all mappings
-        tokens[tokenId] = 0
-        decimals[tokenId] = 0
-        collateralFactors[tokenId] = 0
-        liquidationThresholds[tokenId] = 0
+    // DIA Fetch
+    pub fn getDiaPrice(token: ByteVec) -> U256 {
+        if (tokens[token].dia != '') {
+            // make dia call to get value
+        }
     }
 
-    // Multi-pool price aggregation
-    pub fn getPrice(token: ByteVec) -> U256 {
-        return tokens[token]
-    }
-
-    pub fn getAggregatedPrice(token: ByteVec, pools: [ByteVec; 5]) -> U256 {
+    // Get Aggregated Price
+    pub fn getAggregatedPrice(token: ByteVec) -> U256 {
         // Get price from multiple pools and return weighted average
         let mut totalPrice = 0
         let mut totalWeight = 0
         
-        for (let mut i = 0; i < 5; i = i + 1) {
-            if (pools[i] != #) {
+        for (let mut i = 0; i < tokens[token].aggregators; i = i + 1) {
+            if (poolRegistry.contains!(token ++ encodeToByteVec!(i))) {
                 let pool = LendPool(pools[i])
                 let poolPrice = getPoolPrice(pool, token)
-                let poolLiquidity = getPoolLiquidity(pool, token)
+                let poolLiquidity = TokenPair()(pool, token)
                 
                 totalPrice = totalPrice + (poolPrice * poolLiquidity)
                 totalWeight = totalWeight + poolLiquidity

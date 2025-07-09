@@ -1,0 +1,10 @@
+// should be able to determine the amount from any pair
+
+// hoping this will work with elexium and ayin
+
+Interface TokenPair {
+
+    // get methods for functions
+    pub fn getReserves() -> (U256, U256)
+    pub fn getTokenPair() -> (ByteVec, ByteVec)
+}
