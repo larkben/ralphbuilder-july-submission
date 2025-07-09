@@ -1,0 +1,242 @@
+// oracle / liquidation manager
+
+Abstract Contract Manager (
+    admin: Address,
+    bot: Address
+) {
+    mapping [ByteVec, U256] tokens                              // dia / tokenId -> price
+    mapping [ByteVec, U256] decimals                            // dia / tokenId -> decimals
+    mapping [ByteVec, U256] collateralFactors                   // token -> collateral factor (basis points)
+    mapping [ByteVec, U256] liquidationThresholds               // token -> liquidation threshold
+    mapping [Address, mapping[ByteVec, U256]] userCollateral    // user -> token -> amount
+    mapping [Address, mapping[ByteVec, U256]] userDebt          // user -> token -> amount
+    mapping [ByteVec, ByteVec] poolRegistry                     // token -> pool address
+
+    pub fn addToken(tokenId: ByteVec, decimals: U256, collateralFactor: U256, liquidationThreshold: U256) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        decimals[tokenId] = decimals
+        collateralFactors[tokenId] = collateralFactor
+        liquidationThresholds[tokenId] = liquidationThreshold
+    }
+
+    pub fn removeToken(tokenId: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        // Remove token from all mappings
+        tokens[tokenId] = 0
+        decimals[tokenId] = 0
+        collateralFactors[tokenId] = 0
+        liquidationThresholds[tokenId] = 0
+    }
+
+    // Multi-pool price aggregation
+    pub fn getPrice(token: ByteVec) -> U256 {
+        return tokens[token]
+    }
+
+    pub fn getAggregatedPrice(token: ByteVec, pools: [ByteVec; 5]) -> U256 {
+        // Get price from multiple pools and return weighted average
+        let mut totalPrice = 0
+        let mut totalWeight = 0
+        
+        for (let mut i = 0; i < 5; i = i + 1) {
+            if (pools[i] != #) {
+                let pool = LendPool(pools[i])
+                let poolPrice = getPoolPrice(pool, token)
+                let poolLiquidity = getPoolLiquidity(pool, token)
+                
+                totalPrice = totalPrice + (poolPrice * poolLiquidity)
+                totalWeight = totalWeight + poolLiquidity
+            }
+        }
+        
+        if (totalWeight > 0) {
+            return totalPrice / totalWeight
+        }
+        return tokens[token]
+    }
+
+    pub fn updatePrice(token: ByteVec, newPrice: U256) -> () {
+        checkCaller!(callerAddress!() == bot, 0)
+        tokens[token] = newPrice
+    }
+
+    pub fn updateMultiplePrices(tokens: [ByteVec; 10], prices: [U256; 10]) -> () {
+        checkCaller!(callerAddress!() == bot, 0)
+        
+        for (let mut i = 0; i < 10; i = i + 1) {
+            if (tokens[i] != #) {
+                tokens[tokens[i]] = prices[i]
+            }
+        }
+    }
+
+    // Health factor calculations
+    pub fn calculateHealthFactor(user: Address) -> U256 {
+        let totalCollateralValue = getTotalCollateralValue(user)
+        let totalDebtValue = getTotalDebtValue(user)
+        
+        if (totalDebtValue == 0) {
+            return 1000000000000000000000 // Very high health factor
+        }
+        
+        // Health factor = (collateral * liquidation threshold) / debt
+        return (totalCollateralValue * 1000000000000000000) / totalDebtValue
+    }
+
+    pub fn getTotalCollateralValue(user: Address) -> U256 {
+        let mut totalValue = 0
+        
+        // Iterate through all tokens (would need token enumeration)
+        // For each token, get user collateral and multiply by price and collateral factor
+        // totalValue += userCollateral[user][token] * getPrice(token) * collateralFactors[token] / 10000
+        
+        return totalValue
+    }
+
+    pub fn getTotalDebtValue(user: Address) -> U256 {
+        let mut totalValue = 0
+        
+        // Iterate through all tokens
+        // For each token, get user debt and multiply by price
+        // totalValue += userDebt[user][token] * getPrice(token)
+        
+        return totalValue
+    }
+
+    // Liquidation functions
+    pub fn canLiquidate(user: Address) -> Bool {
+        return calculateHealthFactor(user) < 1000000000000000000 // < 1.0
+    }
+
+    pub fn getLiquidationAmount(user: Address, debtToken: ByteVec) -> U256 {
+        let userDebtAmount = userDebt[user][debtToken]
+        let maxLiquidation = userDebtAmount * 500 / 1000 // 50% max liquidation
+        return maxLiquidation
+    }
+
+    pub fn calculateLiquidationReward(
+        collateralToken: ByteVec,
+        debtToken: ByteVec,
+        debtAmount: U256
+    ) -> U256 {
+        let collateralPrice = getPrice(collateralToken)
+        let debtPrice = getPrice(debtToken)
+        let liquidationBonus = 1050 // 5% bonus
+        
+        // Calculate collateral amount to seize
+        let collateralAmount = (debtAmount * debtPrice * liquidationBonus) / (collateralPrice * 1000)
+        return collateralAmount
+    }
+
+    // Position management
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn updateUserCollateral(user: Address, token: ByteVec, amount: U256, isIncrease: Bool) -> () {
+        if (isIncrease) {
+            userCollateral[user][token] = userCollateral[user][token] + amount
+        } else {
+            userCollateral[user][token] = userCollateral[user][token] - amount
+        }
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn updateUserDebt(user: Address, token: ByteVec, amount: U256, isIncrease: Bool) -> () {
+        if (isIncrease) {
+            userDebt[user][token] = userDebt[user][token] + amount
+        } else {
+            userDebt[user][token] = userDebt[user][token] - amount
+        }
+    }
+
+    // Pool registry
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn registerPool(token: ByteVec, poolAddress: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        poolRegistry[token] = poolAddress
+    }
+
+    pub fn getPoolForToken(token: ByteVec) -> ByteVec {
+        return poolRegistry[token]
+    }
+
+    // Interest rate models
+    pub fn getSupplyRate(token: ByteVec, utilization: U256) -> U256 {
+        // Simple linear model: base + slope * utilization
+        let baseRate = 20000000000000000 // 2% base rate
+        let slope = 100000000000000000 // 10% slope
+        
+        return baseRate + (slope * utilization / 1000000000000000000)
+    }
+
+    pub fn getBorrowRate(token: ByteVec, utilization: U256) -> U256 {
+        let supplyRate = getSupplyRate(token, utilization)
+        let spread = 20000000000000000 // 2% spread
+        
+        return supplyRate + spread
+    }
+
+    pub fn getUtilization(token: ByteVec) -> U256 {
+        let pool = LendPool(poolRegistry[token])
+        let totalSupply = pool.collateral
+        let totalBorrow = pool.lending
+        
+        if (totalSupply == 0) {
+            return 0
+        }
+        
+        return (totalBorrow * 1000000000000000000) / totalSupply
+    }
+
+    // Risk management
+    pub fn getMaxBorrowAmount(user: Address, token: ByteVec) -> U256 {
+        let collateralValue = getTotalCollateralValue(user)
+        let currentDebt = getTotalDebtValue(user)
+        let tokenPrice = getPrice(token)
+        let collateralFactor = collateralFactors[token]
+        
+        let maxDebt = (collateralValue * collateralFactor) / 10000
+        let availableDebt = maxDebt - currentDebt
+        
+        if (availableDebt > 0) {
+            return availableDebt / tokenPrice
+        }
+        
+        return 0
+    }
+
+    // Helper functions
+    fn getPoolPrice(pool: LendPool, token: ByteVec) -> U256 {
+        // Get price from specific pool
+        return 0 // Implementation depends on pool structure
+    }
+
+    fn getPoolLiquidity(pool: LendPool, token: ByteVec) -> U256 {
+        // Get liquidity from specific pool
+        return pool.collateral // Simplified
+    }
+
+    // Emergency pause
+    mapping [ByteVec, Bool] pausedTokens
+    Bool mut globalPause
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn pauseToken(token: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        pausedTokens[token] = true
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn unpauseToken(token: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        pausedTokens[token] = false
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn setGlobalPause(paused: Bool) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        globalPause = paused
+    }
+
+    pub fn isTokenPaused(token: ByteVec) -> Bool {
+        return globalPause || pausedTokens[token]
+    }
+}  

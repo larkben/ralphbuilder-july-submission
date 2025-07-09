@@ -1,9 +1,248 @@
-Contract LendingRouter () {
-    fn supply() -> () {
+// Multi-hop routing structures
+struct HopPath {
+    pools: [ByteVec; 5],  // Max 5 hops
+    tokens: [ByteVec; 6], // tokens[i] -> pools[i] -> tokens[i+1]
+    hopCount: U256
+}
 
+struct LiquidityQuote {
+    inputAmount: U256,
+    outputAmount: U256,
+    priceImpact: U256,
+    fees: U256,
+    path: HopPath
+}
+
+Contract LendingRouter (
+    manager: ByteVec,
+    poolFactory: ByteVec
+) {
+    // Core lending functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn supply(poolId: ByteVec, tokenId: ByteVec, amount: U256) -> () {
+        // Direct supply to specific pool
+        let pool = LendPool(poolId)
+        pool.supply(amount)
     }
 
-    fn borrow() -> () {
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn borrow(poolId: ByteVec, tokenId: ByteVec, amount: U256) -> () {
+        // Direct borrow from specific pool
+        let pool = LendPool(poolId)
+        pool.borrow(amount)
+    }
 
+    // Multi-hop supply routing
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn supplyWithRouting(
+        inputToken: ByteVec,
+        outputToken: ByteVec,
+        inputAmount: U256,
+        minOutputAmount: U256,
+        maxHops: U256
+    ) -> U256 {
+        // Find optimal path for supply
+        let path = findOptimalSupplyPath(inputToken, outputToken, inputAmount, maxHops)
+        
+        // Execute multi-hop supply
+        return executeSupplyPath(path, inputAmount, minOutputAmount)
+    }
+
+    // Multi-hop borrow routing
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn borrowWithRouting(
+        collateralToken: ByteVec,
+        borrowToken: ByteVec,
+        collateralAmount: U256,
+        borrowAmount: U256,
+        maxHops: U256
+    ) -> U256 {
+        // Find optimal path for borrow
+        let path = findOptimalBorrowPath(collateralToken, borrowToken, collateralAmount, maxHops)
+        
+        // Execute multi-hop borrow
+        return executeBorrowPath(path, collateralAmount, borrowAmount)
+    }
+
+    // Liquidation routing
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn liquidateWithRouting(
+        user: Address,
+        collateralToken: ByteVec,
+        debtToken: ByteVec,
+        debtAmount: U256,
+        maxHops: U256
+    ) -> U256 {
+        // Find optimal liquidation path
+        let path = findOptimalLiquidationPath(collateralToken, debtToken, debtAmount, maxHops)
+        
+        // Execute liquidation
+        return executeLiquidationPath(user, path, debtAmount)
+    }
+
+    // Path finding functions
+    pub fn findOptimalSupplyPath(
+        inputToken: ByteVec,
+        outputToken: ByteVec,
+        amount: U256,
+        maxHops: U256
+    ) -> HopPath {
+        // Implementation would use BFS/DFS to find best path
+        // For now, return direct path
+        return HopPath {
+            pools: [#, #, #, #, #],
+            tokens: [inputToken, outputToken, #, #, #, #],
+            hopCount: 1
+        }
+    }
+
+    pub fn findOptimalBorrowPath(
+        collateralToken: ByteVec,
+        borrowToken: ByteVec,
+        collateralAmount: U256,
+        maxHops: U256
+    ) -> HopPath {
+        // Find path that maximizes borrowing power
+        return HopPath {
+            pools: [#, #, #, #, #],
+            tokens: [collateralToken, borrowToken, #, #, #, #],
+            hopCount: 1
+        }
+    }
+
+    pub fn findOptimalLiquidationPath(
+        collateralToken: ByteVec,
+        debtToken: ByteVec,
+        debtAmount: U256,
+        maxHops: U256
+    ) -> HopPath {
+        // Find path that maximizes liquidation profit
+        return HopPath {
+            pools: [#, #, #, #, #],
+            tokens: [collateralToken, debtToken, #, #, #, #],
+            hopCount: 1
+        }
+    }
+
+    // Execution functions
+    fn executeSupplyPath(path: HopPath, inputAmount: U256, minOutputAmount: U256) -> U256 {
+        // Execute each hop in the path
+        let mut currentAmount = inputAmount
+        
+        for (let mut i = 0; i < path.hopCount; i = i + 1) {
+            let pool = LendPool(path.pools[i])
+            // Execute swap/supply at each hop
+            // currentAmount = pool.executeHop(currentAmount, path.tokens[i], path.tokens[i+1])
+        }
+        
+        assert!(currentAmount >= minOutputAmount, 0)
+        return currentAmount
+    }
+
+    fn executeBorrowPath(path: HopPath, collateralAmount: U256, borrowAmount: U256) -> U256 {
+        // Execute borrow across multiple pools
+        let mut totalBorrowed = 0
+        
+        for (let mut i = 0; i < path.hopCount; i = i + 1) {
+            let pool = LendPool(path.pools[i])
+            // Execute borrow at each hop
+            // totalBorrowed = totalBorrowed + pool.borrowFromPool(...)
+        }
+        
+        return totalBorrowed
+    }
+
+    fn executeLiquidationPath(user: Address, path: HopPath, debtAmount: U256) -> U256 {
+        // Execute liquidation across multiple pools
+        let mut totalLiquidated = 0
+        
+        for (let mut i = 0; i < path.hopCount; i = i + 1) {
+            let pool = LendPool(path.pools[i])
+            // Execute liquidation at each hop
+            // totalLiquidated = totalLiquidated + pool.liquidatePosition(...)
+        }
+        
+        return totalLiquidated
+    }
+
+    // Quote functions for front-end
+    pub fn getSupplyQuote(
+        inputToken: ByteVec,
+        outputToken: ByteVec,
+        inputAmount: U256,
+        maxHops: U256
+    ) -> LiquidityQuote {
+        let path = findOptimalSupplyPath(inputToken, outputToken, inputAmount, maxHops)
+        
+        return LiquidityQuote {
+            inputAmount: inputAmount,
+            outputAmount: 0, // Calculate based on path
+            priceImpact: 0,  // Calculate price impact
+            fees: 0,         // Calculate total fees
+            path: path
+        }
+    }
+
+    pub fn getBorrowQuote(
+        collateralToken: ByteVec,
+        borrowToken: ByteVec,
+        collateralAmount: U256,
+        maxHops: U256
+    ) -> LiquidityQuote {
+        let path = findOptimalBorrowPath(collateralToken, borrowToken, collateralAmount, maxHops)
+        
+        return LiquidityQuote {
+            inputAmount: collateralAmount,
+            outputAmount: 0, // Calculate max borrow amount
+            priceImpact: 0,
+            fees: 0,
+            path: path
+        }
+    }
+
+    // Cross-pool arbitrage
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn executeArbitrage(
+        token1: ByteVec,
+        token2: ByteVec,
+        amount: U256,
+        pools: [ByteVec; 3]
+    ) -> U256 {
+        // Execute triangular arbitrage across pools
+        let mut profit = 0
+        
+        // Flash loan -> swap -> swap -> repay -> profit
+        
+        return profit
+    }
+
+    // Health factor and position management
+    pub fn getHealthFactor(user: Address) -> U256 {
+        let mgr = Manager(manager)
+        // Calculate health factor across all positions
+        return mgr.calculateHealthFactor(user)
+    }
+
+    pub fn canLiquidate(user: Address) -> Bool {
+        return getHealthFactor(user) < 1000000000000000000 // < 1.0
+    }
+
+    // Pool discovery and analytics
+    pub fn getAllPools() -> [ByteVec; 50] {
+        let factory = PoolFactory(poolFactory)
+        return factory.getAllPools()
+    }
+
+    pub fn getPoolsByToken(token: ByteVec) -> [ByteVec; 20] {
+        let factory = PoolFactory(poolFactory)
+        return factory.getPoolsByToken(token)
+    }
+
+    // Emergency functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn emergencyWithdraw(poolId: ByteVec, user: Address) -> () {
+        // Emergency withdrawal in case of issues
+        let pool = LendPool(poolId)
+        // pool.emergencyWithdraw(user)
     }
 }

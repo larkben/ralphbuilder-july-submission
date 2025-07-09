@@ -1,12 +1,327 @@
+struct PoolInfo {
+        tokenA: ByteVec,
+        tokenB: ByteVec,
+        creator: Address,
+        createdAt: U256,
+        isActive: Bool,
+        totalLiquidity: U256,
+        volume24h: U256,
+        feesEarned: U256
+}
+
+struct PoolMetrics {
+        tvl: U256,
+        utilizationRate: U256,
+        supplyRate: U256,
+        borrowRate: U256,
+        totalSuppliers: U256,
+        totalBorrowers: U256
+}
+
 Contract PoolFactory (
     admin: Address,
-    fees: U256
+    fees: U256,
+    manager: ByteVec
 ) {
-    pub fn createPool() -> () {
+    mapping [ByteVec, [ByteVec; 50]] tokenPools // token -> array of pool addresses
+    mapping [ByteVec, U256] tokenPoolCount // token -> number of pools
+    mapping [ByteVec, Bool] poolExists // pool address -> exists
+    mapping [ByteVec, PoolInfo] poolInfo // pool address -> pool info
+    mapping [ByteVec, U256] poolBribes // pool address -> bribe amount
 
+    // Create new lending pool
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn createPool(
+        tokenA: ByteVec,
+        tokenB: ByteVec,
+        name: ByteVec,
+        symbol: ByteVec,
+        initialSupply: U256
+    ) -> ByteVec {
+        let creator = callerAddress!()
+        
+        // Check if pool already exists for this pair
+        assert!(!poolPairExists(tokenA, tokenB), 0)
+        
+        // Create new pool contract
+        let poolAddress = createPoolContract(tokenA, tokenB, name, symbol)
+        
+        // Store pool information
+        let poolData = PoolInfo {
+            tokenA: tokenA,
+            tokenB: tokenB,
+            creator: creator,
+            createdAt: blockTimeStamp!(),
+            isActive: true,
+            totalLiquidity: initialSupply,
+            volume24h: 0,
+            feesEarned: 0
+        }
+        
+        poolInfo[poolAddress] = poolData
+        poolExists[poolAddress] = true
+        
+        // Add to token mappings
+        addPoolToToken(tokenA, poolAddress)
+        addPoolToToken(tokenB, poolAddress)
+        
+        // Add to global pool registry
+        allPools[totalPoolCount] = poolAddress
+        totalPoolCount = totalPoolCount + 1
+        
+        // Register pool with manager
+        let mgr = Manager(manager)
+        mgr.registerPool(tokenA, poolAddress)
+        mgr.registerPool(tokenB, poolAddress)
+        
+        // Emit pool creation event
+        // emit PoolCreated(poolAddress, tokenA, tokenB, creator)
+        
+        return poolAddress
     }
 
-    pub fn bribePool() -> () {
+    // Create pool contract (simplified - would deploy actual contract)
+    fn createPoolContract(
+        tokenA: ByteVec,
+        tokenB: ByteVec,
+        name: ByteVec,
+        symbol: ByteVec
+    ) -> ByteVec {
+        // In real implementation, would deploy new LendPool contract
+        // For now, return mock address
+        return tokenA // placeholder
+    }
 
+    // Add pool to token mapping
+    @using(checkExternalCaller = false, updateFields = true)
+    fn addPoolToToken(token: ByteVec, poolAddress: ByteVec) -> () {
+        let currentCount = tokenPoolCount[token]
+        if (currentCount < 50) {
+            tokenPools[token][currentCount] = poolAddress
+            tokenPoolCount[token] = currentCount + 1
+        }
+    }
+
+    // Check if pool exists for token pair
+    pub fn poolPairExists(tokenA: ByteVec, tokenB: ByteVec) -> Bool {
+        let poolsA = getPoolsByToken(tokenA)
+        let poolsB = getPoolsByToken(tokenB)
+        
+        // Check if any pool contains both tokens
+        for (let mut i = 0; i < tokenPoolCount[tokenA]; i = i + 1) {
+            for (let mut j = 0; j < tokenPoolCount[tokenB]; j = j + 1) {
+                if (poolsA[i] == poolsB[j] && poolsA[i] != #) {
+                    return true
+                }
+            }
+        }
+        
+        return false
+    }
+
+    // Get all pools for a specific token
+    pub fn getPoolsByToken(token: ByteVec) -> [ByteVec; 50] {
+        return tokenPools[token]
+    }
+
+    // Get all pools
+    pub fn getAllPools() -> [ByteVec; 100] {
+        return allPools
+    }
+
+    // Get pool information
+    pub fn getPoolInfo(poolAddress: ByteVec) -> PoolInfo {
+        return poolInfo[poolAddress]
+    }
+
+    // Get pool metrics
+    pub fn getPoolMetrics(poolAddress: ByteVec) -> PoolMetrics {
+        let pool = LendPool(poolAddress)
+        let (totalSupply, totalBorrow, utilization, supplyIndex, borrowIndex) = pool.getPoolInfo()
+        let (supplyRate, borrowRate) = pool.getCurrentRates()
+        
+        return PoolMetrics {
+            tvl: totalSupply,
+            utilizationRate: utilization,
+            supplyRate: supplyRate,
+            borrowRate: borrowRate,
+            totalSuppliers: 0, // Would need to track this
+            totalBorrowers: 0  // Would need to track this
+        }
+    }
+
+    // Find best pool for token pair
+    pub fn findBestPool(tokenA: ByteVec, tokenB: ByteVec) -> ByteVec {
+        let pools = findPoolsForPair(tokenA, tokenB)
+        let mut bestPool = #
+        let mut bestRate = 0
+        
+        for (let mut i = 0; i < 10; i = i + 1) {
+            if (pools[i] != #) {
+                let metrics = getPoolMetrics(pools[i])
+                if (metrics.supplyRate > bestRate) {
+                    bestRate = metrics.supplyRate
+                    bestPool = pools[i]
+                }
+            }
+        }
+        
+        return bestPool
+    }
+
+    // Bribe pool functionality
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn bribePool(poolAddress: ByteVec, bribeAmount: U256) -> () {
+        let user = callerAddress!()
+        
+        // Check if pool exists
+        assert!(poolExists[poolAddress], 0)
+        
+        // Add bribe to pool
+        poolBribes[poolAddress] = poolBribes[poolAddress] + bribeAmount
+        
+        // Transfer bribe tokens from user
+        // transferFrom(user, this, bribeAmount)
+        
+        // Emit bribe event
+        // emit PoolBribed(poolAddress, user, bribeAmount)
+    }
+
+    // Get pool bribe amount
+    pub fn getPoolBribe(poolAddress: ByteVec) -> U256 {
+        return poolBribes[poolAddress]
+    }
+
+    // Distribute bribes to pool participants
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn distributeBribes(poolAddress: ByteVec) -> () {
+        let totalBribe = poolBribes[poolAddress]
+        
+        if (totalBribe > 0) {
+            // Get pool participants and distribute proportionally
+            let pool = LendPool(poolAddress)
+            let (totalSupply, totalBorrow, utilization, supplyIndex, borrowIndex) = pool.getPoolInfo()
+            
+            // Distribute to suppliers and borrowers
+            // This would require iterating through all users
+            
+            // Reset bribe amount
+            poolBribes[poolAddress] = 0
+        }
+    }
+
+    // Update pool statistics
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn updatePoolStats(poolAddress: ByteVec, volume: U256, fees: U256) -> () {
+        // Only pool or authorized caller can update stats
+        if (poolExists[poolAddress]) {
+            let mut info = poolInfo[poolAddress]
+            info.volume24h = volume
+            info.feesEarned = fees
+            poolInfo[poolAddress] = info
+        }
+    }
+
+    // Pause/unpause pool
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn pausePool(poolAddress: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        
+        if (poolExists[poolAddress]) {
+            let mut info = poolInfo[poolAddress]
+            info.isActive = false
+            poolInfo[poolAddress] = info
+        }
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn unpausePool(poolAddress: ByteVec) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        
+        if (poolExists[poolAddress]) {
+            let mut info = poolInfo[poolAddress]
+            info.isActive = true
+            poolInfo[poolAddress] = info
+        }
+    }
+
+    // Get factory statistics
+    pub fn getFactoryStats() -> (U256, U256, U256) {
+        let mut totalTVL = 0
+        let mut totalVolume = 0
+        let mut totalFees = 0
+        
+        for (let mut i = 0; i < totalPoolCount; i = i + 1) {
+            let pool = allPools[i]
+            if (pool != #) {
+                let info = poolInfo[pool]
+                let metrics = getPoolMetrics(pool)
+                
+                totalTVL = totalTVL + metrics.tvl
+                totalVolume = totalVolume + info.volume24h
+                totalFees = totalFees + info.feesEarned
+            }
+        }
+        
+        return (totalTVL, totalVolume, totalFees)
+    }
+
+    // Admin functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn setFees(newFees: U256) -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        fees = newFees
+    }
+
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn collectFees() -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        
+        // Collect fees from all pools
+        for (let mut i = 0; i < totalPoolCount; i = i + 1) {
+            let pool = allPools[i]
+            if (pool != #) {
+                let lendPool = LendPool(pool)
+                // lendPool.withdrawReserves(fees)
+            }
+        }
+    }
+
+    // Emergency functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn emergencyPauseAll() -> () {
+        checkCaller!(callerAddress!() == admin, 0)
+        
+        for (let mut i = 0; i < totalPoolCount; i = i + 1) {
+            let pool = allPools[i]
+            if (pool != #) {
+                pausePool(pool)
+            }
+        }
+    }
+
+    // Pool discovery helpers
+    pub fn getPoolCount() -> U256 {
+        return totalPoolCount
+    }
+
+    pub fn getPoolsByTokenCount(token: ByteVec) -> U256 {
+        return tokenPoolCount[token]
+    }
+
+    pub fn getActivePoolCount() -> U256 {
+        let mut activeCount = 0
+        
+        for (let mut i = 0; i < totalPoolCount; i = i + 1) {
+            let pool = allPools[i]
+            if (pool != #) {
+                let info = poolInfo[pool]
+                if (info.isActive) {
+                    activeCount = activeCount + 1
+                }
+            }
+        }
+        
+        return activeCount
     }
 }

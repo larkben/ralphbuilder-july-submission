@@ -1,20 +1,353 @@
 Contract LendPool (
-    tokenLend: ByteVec,
-    tokenCollateral: ByteVec,
+    name: ByteVec,
+    symbol: ByteVec,
+    tokenLend: ByteVec,         // lend
+    tokenCollateral: ByteVec,   // collateral
     mut lending: U256,
-    mut collateral: U256
-) implements {
+    mut collateral: U256,
+    // parent contract
+    manager: ByteVec,
+    mut fees: U256,
+    mut totalSupply: U256,
+    mut totalBorrow: U256,
+    mut reserveFactor: U256,    // portion of interest kept as reserves
+    mut lastUpdateTime: U256,
+    mut supplyIndex: U256,      // compound interest index for suppliers
+    mut borrowIndex: U256       // compound interest index for borrowers
+) extends XToken(name, symbol) {
+
+    mapping [Address, U256] userSupply
+    mapping [Address, U256] userBorrow
+    mapping [Address, U256] userSupplyIndex  // last index when user supplied
+    mapping [Address, U256] userBorrowIndex  // last index when user borrowed
+
+    // Core supply function with interest accrual
     @using(checkExternalCaller = false, updateFields = true)
     pub fn supply(amount: U256) -> () {
+        accrueInterest()
+        
+        let user = callerAddress!()
+        
+        // Update user's accrued interest before new supply
+        updateUserSupplyInterest(user)
+        
+        // Add new supply
+        userSupply[user] = userSupply[user] + amount
+        totalSupply = totalSupply + amount
         collateral = collateral + amount
+        
+        // Update user's index
+        userSupplyIndex[user] = supplyIndex
+        
+        // Mint xTokens to user
+        // mintXTokens(user, amount)
+    }
+
+    // Core borrow function with interest accrual
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn borrow(amount: U256) -> () {
+        accrueInterest()
+        
+        let user = callerAddress!()
+        let mgr = Manager(manager)
+        
+        // Check if user can borrow this amount
+        let maxBorrow = mgr.getMaxBorrowAmount(user, tokenLend)
+        assert!(amount <= maxBorrow, 0)
+        
+        // Update user's accrued interest before new borrow
+        updateUserBorrowInterest(user)
+        
+        // Add new borrow
+        userBorrow[user] = userBorrow[user] + amount
+        totalBorrow = totalBorrow + amount
+        lending = lending + amount
+        
+        // Update user's index
+        userBorrowIndex[user] = borrowIndex
+        
+        // Update user position in manager
+        mgr.updateUserDebt(user, tokenLend, amount, true)
+        
+        // Transfer tokens to user
+        // transferTokens(user, amount)
+    }
+
+    // Repay borrowed amount
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn repay(amount: U256) -> () {
+        accrueInterest()
+        
+        let user = callerAddress!()
+        let mgr = Manager(manager)
+        
+        // Update user's accrued interest before repayment
+        updateUserBorrowInterest(user)
+        
+        // Calculate actual repay amount (min of amount and user's debt)
+        let currentDebt = getUserBorrowBalance(user)
+        let repayAmount = if (amount > currentDebt) currentDebt else amount
+        
+        // Update balances
+        userBorrow[user] = userBorrow[user] - repayAmount
+        totalBorrow = totalBorrow - repayAmount
+        lending = lending - repayAmount
+        
+        // Update user's index
+        userBorrowIndex[user] = borrowIndex
+        
+        // Update user position in manager
+        mgr.updateUserDebt(user, tokenLend, repayAmount, false)
+    }
+
+    // Withdraw supplied amount
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn withdraw(amount: U256) -> () {
+        accrueInterest()
+        
+        let user = callerAddress!()
+        
+        // Update user's accrued interest before withdrawal
+        updateUserSupplyInterest(user)
+        
+        // Calculate actual withdraw amount
+        let currentSupply = getUserSupplyBalance(user)
+        let withdrawAmount = if (amount > currentSupply) currentSupply else amount
+        
+        // Check if pool has enough liquidity
+        let availableLiquidity = collateral - lending
+        assert!(withdrawAmount <= availableLiquidity, 0)
+        
+        // Update balances
+        userSupply[user] = userSupply[user] - withdrawAmount
+        totalSupply = totalSupply - withdrawAmount
+        collateral = collateral - withdrawAmount
+        
+        // Update user's index
+        userSupplyIndex[user] = supplyIndex
+        
+        // Burn xTokens from user
+        // burnXTokens(user, withdrawAmount)
+        
+        // Transfer tokens to user
+        // transferTokens(user, withdrawAmount)
+    }
+
+    // Liquidate undercollateralized position
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn liquidate(
+        borrower: Address,
+        repayAmount: U256,
+        collateralToken: ByteVec
+    ) -> U256 {
+        accrueInterest()
+        
+        let mgr = Manager(manager)
+        let liquidator = callerAddress!()
+        
+        // Check if borrower can be liquidated
+        assert!(mgr.canLiquidate(borrower), 0)
+        
+        // Update borrower's accrued interest
+        updateUserBorrowInterest(borrower)
+        
+        // Calculate liquidation amounts
+        let maxLiquidation = mgr.getLiquidationAmount(borrower, tokenLend)
+        let actualRepay = if (repayAmount > maxLiquidation) maxLiquidation else repayAmount
+        
+        // Calculate collateral to seize
+        let seizeAmount = mgr.calculateLiquidationReward(collateralToken, tokenLend, actualRepay)
+        
+        // Update borrower's debt
+        userBorrow[borrower] = userBorrow[borrower] - actualRepay
+        totalBorrow = totalBorrow - actualRepay
+        lending = lending - actualRepay
+        
+        // Update indices
+        userBorrowIndex[borrower] = borrowIndex
+        
+        // Update manager positions
+        mgr.updateUserDebt(borrower, tokenLend, actualRepay, false)
+        mgr.updateUserCollateral(borrower, collateralToken, seizeAmount, false)
+        
+        // Transfer seized collateral to liquidator
+        // transferCollateral(liquidator, collateralToken, seizeAmount)
+        
+        return seizeAmount
+    }
+
+    // Interest accrual function
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn accrueInterest() -> () {
+        let currentTime = blockTimeStamp!()
+        let timeDelta = currentTime - lastUpdateTime
+        
+        if (timeDelta > 0) {
+            let mgr = Manager(manager)
+            let utilization = mgr.getUtilization(tokenLend)
+            let borrowRate = mgr.getBorrowRate(tokenLend, utilization)
+            let supplyRate = mgr.getSupplyRate(tokenLend, utilization)
+            
+            // Calculate interest multiplier (simplified)
+            let interestFactor = (borrowRate * timeDelta) / 31536000 // seconds in year
+            
+            // Update borrow index
+            borrowIndex = borrowIndex + (borrowIndex * interestFactor / 1000000000000000000)
+            
+            // Update supply index (accounting for reserves)
+            let supplyInterestFactor = (supplyRate * timeDelta) / 31536000
+            supplyIndex = supplyIndex + (supplyIndex * supplyInterestFactor / 1000000000000000000)
+            
+            // Update reserves
+            let reserveIncrease = (totalBorrow * interestFactor * reserveFactor) / (10000 * 1000000000000000000)
+            fees = fees + reserveIncrease
+            
+            lastUpdateTime = currentTime
+        }
+    }
+
+    // Update user's supply interest
+    @using(checkExternalCaller = false, updateFields = true)
+    fn updateUserSupplyInterest(user: Address) -> () {
+        let userIndex = userSupplyIndex[user]
+        if (userIndex > 0 && userIndex < supplyIndex) {
+            let interestAccrued = (userSupply[user] * (supplyIndex - userIndex)) / 1000000000000000000
+            userSupply[user] = userSupply[user] + interestAccrued
+        }
+    }
+
+    // Update user's borrow interest
+    @using(checkExternalCaller = false, updateFields = true)
+    fn updateUserBorrowInterest(user: Address) -> () {
+        let userIndex = userBorrowIndex[user]
+        if (userIndex > 0 && userIndex < borrowIndex) {
+            let interestAccrued = (userBorrow[user] * (borrowIndex - userIndex)) / 1000000000000000000
+            userBorrow[user] = userBorrow[user] + interestAccrued
+        }
+    }
+
+    // Get user's current supply balance with accrued interest
+    pub fn getUserSupplyBalance(user: Address) -> U256 {
+        let userIndex = userSupplyIndex[user]
+        if (userIndex > 0 && userIndex < supplyIndex) {
+            let interestAccrued = (userSupply[user] * (supplyIndex - userIndex)) / 1000000000000000000
+            return userSupply[user] + interestAccrued
+        }
+        return userSupply[user]
+    }
+
+    // Get user's current borrow balance with accrued interest
+    pub fn getUserBorrowBalance(user: Address) -> U256 {
+        let userIndex = userBorrowIndex[user]
+        if (userIndex > 0 && userIndex < borrowIndex) {
+            let interestAccrued = (userBorrow[user] * (borrowIndex - userIndex)) / 1000000000000000000
+            return userBorrow[user] + interestAccrued
+        }
+        return userBorrow[user]
+    }
+
+    // Get pool utilization rate
+    pub fn getUtilization() -> U256 {
+        if (totalSupply == 0) {
+            return 0
+        }
+        return (totalBorrow * 1000000000000000000) / totalSupply
+    }
+
+    // Get current supply and borrow rates
+    pub fn getCurrentRates() -> (U256, U256) {
+        let mgr = Manager(manager)
+        let utilization = getUtilization()
+        let supplyRate = mgr.getSupplyRate(tokenLend, utilization)
+        let borrowRate = mgr.getBorrowRate(tokenLend, utilization)
+        return (supplyRate, borrowRate)
+    }
+
+    // Flash loan function
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn flashLoan(amount: U256, data: ByteVec) -> () {
+        let user = callerAddress!()
+        let availableLiquidity = collateral - lending
+        
+        assert!(amount <= availableLiquidity, 0)
+        
+        // Calculate flash loan fee (0.1%)
+        let fee = amount * 10 / 10000
+        
+        // Loan out tokens
+        // transferTokens(user, amount)
+        
+        // Call user's callback function
+        // user.flashLoanCallback(amount, fee, data)
+        
+        // Check repayment
+        let balanceAfter = collateral - lending
+        let expectedBalance = availableLiquidity - amount + fee
+        assert!(balanceAfter >= expectedBalance, 0)
+        
+        // Add fee to reserves
+        fees = fees + fee
+    }
+
+    // Emergency functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn emergencyWithdraw(user: Address) -> () {
+        let mgr = Manager(manager)
+        // Only allow in emergency pause
+        assert!(mgr.isTokenPaused(tokenLend) || mgr.isTokenPaused(tokenCollateral), 0)
+        
+        // Withdraw user's full balance
+        let balance = getUserSupplyBalance(user)
+        if (balance > 0) {
+            withdraw(balance)
+        }
+    }
+
+    // Pool analytics
+    pub fn getPoolInfo() -> (U256, U256, U256, U256, U256) {
+        return (totalSupply, totalBorrow, getUtilization(), supplyIndex, borrowIndex)
+    }
+
+    // Admin functions
+    @using(checkExternalCaller = false, updateFields = true)
+    pub fn setReserveFactor(newReserveFactor: U256) -> () {
+        let mgr = Manager(manager)
+        // Only admin can set reserve factor
+        reserveFactor = newReserveFactor
     }
 
     @using(checkExternalCaller = false, updateFields = true)
-    pub fn borrow(amount: U256) -> () {
-        lending = lending + amount
+    pub fn withdrawReserves(amount: U256) -> () {
+        let mgr = Manager(manager)
+        // Only admin can withdraw reserves
+        let withdrawAmount = if (amount > fees) fees else amount
+        fees = fees - withdrawAmount
+        
+        // Transfer reserves to admin
+        // transferTokens(admin, withdrawAmount)
     }
 
+    // Claim yield/rewards
     pub fn claim() -> () {
-        // redeem xToken for yeild
+        accrueInterest()
+        let user = callerAddress!()
+        
+        // Update user's accrued interest
+        updateUserSupplyInterest(user)
+        
+        // Calculate rewards based on supply balance and duration
+        let rewardAmount = calculateRewards(user)
+        
+        // Transfer rewards to user
+        // transferRewards(user, rewardAmount)
+    }
+
+    fn calculateRewards(user: Address) -> U256 {
+        // Calculate rewards based on supply balance and time
+        let supplyBalance = getUserSupplyBalance(user)
+        let rewardRate = 1000000000000000 // 0.1% per day
+        let timeSinceLastClaim = blockTimeStamp!() - lastUpdateTime
+        
+        return (supplyBalance * rewardRate * timeSinceLastClaim) / (86400 * 1000000000000000000)
     }
 }
