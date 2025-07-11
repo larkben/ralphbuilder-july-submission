@@ -5,7 +5,7 @@ Contract TestGetMethods (
     // tokens
     mut tokenOne: ByteVec,
     mut tokenTwo: ByteVec
-) {
+) extends Destroy() {
     @using(updateFields = true, checkExternalCaller = false)
     pub fn getReserves(pair: Address) -> (U256, U256) {
         let (r1, r2) = TokenPair(addressToContractId!(pair)).getReserves()

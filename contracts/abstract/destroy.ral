@@ -1,0 +1,8 @@
+Abstract Contract Destroy () {
+
+    @using(checkExternalCaller = false, assetsInContract = true)
+    pub fn destroy() -> () {
+        destroySelf!(callerAddress!())
+    }
+    
+}
